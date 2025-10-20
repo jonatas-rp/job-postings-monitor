@@ -1,0 +1,87 @@
+# Job Scrapper Configuration File
+# Copy this file to config.yaml and customize for your needs
+
+# Application settings
+log_level: INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+# Output directory for matched jobs
+output_dir: output
+
+# Redis configuration (for caching)
+redis:
+  host: localhost
+  port: 6379
+  db: 0
+
+# Worker definitions
+# Each worker runs independently at its configured interval
+workers:
+  # Google job search worker
+  - name: google_worker
+    type: job
+    enabled: true
+    interval: 60  # seconds between search cycles
+    message: "Searching Google for jobs..."
+    config:
+      source: google
+      # Future: API keys, search queries, etc.
+  
+  # LinkedIn job search worker
+  - name: linkedin_worker
+    type: linkedin
+    enabled: true
+    interval: 90
+    message: "Searching LinkedIn for jobs..."
+    config:
+      source: linkedin
+      keywords:                              # Required technologies (ALL must be in job description)
+        - "python"                           # Programming language
+        - "docker"                           # Containerization
+        - "kubernetes"                       # Orchestration
+        - "aws"                              # Cloud platform
+      location: "Remote"                     # Job location
+      job_type: "F"                          # F=Full-time, P=Part-time, C=Contract
+      workplace_type: "2"                    # 1=On-site, 2=Remote, 3=Hybrid
+      last_time_posted: 86400                # 86400=24h, 604800=week, 2592000=month
+      excluded_companies:                    # Companies to exclude from search
+        - "Company A"
+        - "Company B"
+        - "Acme Corp"
+  
+  # Indeed job search worker
+  - name: indeed_worker
+    type: job
+    enabled: true
+    interval: 120
+    message: "Searching Indeed for jobs..."
+    config:
+      source: indeed
+  
+  # Example disabled worker
+  - name: glassdoor_worker
+    type: job
+    enabled: false  # This worker won't run
+    interval: 150
+    message: "Searching Glassdoor for jobs..."
+    config:
+      source: glassdoor
+
+# Future configuration sections:
+# 
+# search_queries:
+#   - keywords: "Senior Python Developer"
+#     location: "Remote"
+#     sources: ["google", "linkedin"]
+# 
+# matching_criteria:
+#   required_skills:
+#     - python
+#     - docker
+#   preferred_skills:
+#     - aws
+#   excluded_terms:
+#     - junior
+#     - internship
+
+
+

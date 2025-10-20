@@ -1,0 +1,29 @@
+# Core
+python-dotenv==1.0.0
+
+# HTTP & Web Scraping
+requests==2.31.0
+beautifulsoup4==4.12.2
+lxml==4.9.3
+playwright==1.40.0
+
+# Caching
+redis==5.0.1
+
+# Configuration
+PyYAML==6.0.1
+
+# Data Processing
+pandas==2.2.0
+
+# String Matching
+pyahocorasick==2.2.0
+
+# Testing
+pytest==7.4.3
+pytest-mock==3.12.0
+responses==0.24.1
+fakeredis==2.20.0
+
+# Optional
+plyer==2.1.0  # Desktop notifications
