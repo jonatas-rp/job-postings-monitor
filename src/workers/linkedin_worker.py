@@ -143,20 +143,42 @@ class LinkedInWorker(BaseWorker):
                     os.makedirs(output_dir, exist_ok=True)
                     
                     # Generate filename with timestamp
-                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    timestamp_str = datetime.now().strftime("%Y%m%d")
                     csv_filename = f"{output_dir}/{self.name}_jobs_{timestamp_str}.csv"
                     
                     # Convert jobs to DataFrame
                     jobs_data = [job.to_dict() for job in jobs]
-                    df = pd.DataFrame(jobs_data)
+                    new_df = pd.DataFrame(jobs_data)
                     
                     # Remove description column from DataFrame
-                    df = df.drop(columns=['description'], errors='ignore')
+                    new_df = new_df.drop(columns=['description'], errors='ignore')
+                    
+                    # Check if CSV file already exists
+                    if os.path.exists(csv_filename):
+                        # Load existing data
+                        existing_df = pd.read_csv(csv_filename)
+                        self.logger.info(f"Loading existing data from {csv_filename} ({len(existing_df)} existing jobs)")
+                        
+                        # Append new data to existing DataFrame
+                        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                        
+                        # Remove duplicates based on URL (keeps first occurrence)
+                        if 'url' in combined_df.columns:
+                            original_count = len(combined_df)
+                            combined_df = combined_df.drop_duplicates(subset=['url'], keep='first')
+                            duplicates_removed = original_count - len(combined_df)
+                            if duplicates_removed > 0:
+                                self.logger.info(f"Removed {duplicates_removed} duplicate job(s)")
+                        
+                        self.logger.info(f"Combined data: {len(combined_df)} total jobs")
+                    else:
+                        combined_df = new_df
+                        self.logger.info(f"Creating new CSV file: {csv_filename}")
                     
                     # Save to CSV
-                    df.to_csv(csv_filename, index=False, encoding='utf-8')
+                    combined_df.to_csv(csv_filename, index=False, encoding='utf-8')
                     
-                    self.logger.info(f"Saved {len(jobs)} jobs to {csv_filename}")
+                    self.logger.info(f"Saved {len(combined_df)} jobs to {csv_filename}")
                 except Exception as e:
                     self.logger.error(f"Failed to save jobs to CSV: {e}", exc_info=True)
             else:

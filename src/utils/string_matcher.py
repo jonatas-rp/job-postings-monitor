@@ -279,3 +279,4 @@ def get_match_score(keywords: List[str], text: str, case_sensitive: bool = False
     matcher = KeywordMatcher()
     return matcher.get_match_score(keywords, text, case_sensitive)
 
+

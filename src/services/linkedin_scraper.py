@@ -69,14 +69,27 @@ class LinkedInScraperService:
         self.stop()
     
     def start(self) -> None:
-        """Start the browser"""
+        """Start the browser with anti-detection measures"""
         if self._browser is not None:
             self.logger.warning("Browser already started")
             return
         
-        self.logger.info("Starting Playwright browser...")
+        self.logger.info("Starting Playwright browser with stealth mode...")
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=self.headless)
+        
+        # Launch browser with anti-detection arguments
+        self._browser = self._playwright.chromium.launch(
+            headless=self.headless,
+            args=[
+                '--disable-blink-features=AutomationControlled',  # Hide automation
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+            ]
+        )
+        
         self.logger.info("Browser started successfully")
     
     def stop(self) -> None:
@@ -94,6 +107,65 @@ class LinkedInScraperService:
         # Close Redis connection
         if self.redis_client:
             self.redis_client.close()
+    
+    def _create_stealth_page(self) -> Page:
+        """
+        Create a new page with stealth settings to avoid bot detection
+        
+        Returns:
+            Page with anti-detection measures applied
+        """
+        page = self._browser.new_page()
+        
+        # Set realistic user agent
+        page.set_extra_http_headers({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+        })
+        
+        # Set viewport to common resolution
+        page.set_viewport_size({'width': 1920, 'height': 1080})
+        
+        # Remove webdriver property
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            
+            // Override plugins and mimeTypes to look like real browser
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+            
+            // Override languages to look realistic
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+            
+            // Chrome-specific properties
+            window.chrome = {
+                runtime: {}
+            };
+            
+            // Permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+        """)
+        
+        return page
     
     def search_jobs(
         self,
@@ -146,7 +218,7 @@ class LinkedInScraperService:
         jobs_per_page = 10  # LinkedIn API returns 10 jobs per page
         
         try:
-            page = self._browser.new_page()
+            page = self._create_stealth_page()
             page.set_default_timeout(self.timeout)
             
             # Fetch jobs in batches of 10 until we reach max_results
@@ -173,8 +245,20 @@ class LinkedInScraperService:
                 
                 self.logger.debug(f"Fetching page with start={start}, URL: {url}")
                 
-                # Navigate to search page
-                page.goto(url)
+                # Navigate to search page with proper wait strategy
+                try:
+                    page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                    
+                    # Wait for job listings to be present (with timeout)
+                    # LinkedIn API returns jobs in <li> elements
+                    page.wait_for_selector('li', timeout=10000, state='attached')
+                    
+                    # Small delay to ensure page is fully stable
+                    time.sleep(time.time() % 3)
+                    
+                except PlaywrightTimeout:
+                    self.logger.error(f"Timeout waiting for job listings at {url}")
+                    break
                 
                 # Extract job listings from this page
                 jobs, found = self._extract_jobs_from_page(page)
@@ -193,8 +277,8 @@ class LinkedInScraperService:
                 # Move to next page
                 start += jobs_per_page
                 
-                # Small delay to be respectful
-                time.sleep(1)
+                # Longer delay to appear more human-like and avoid detection
+                time.sleep(time.time() % 3)  # Random delay between 3-5 seconds
             
             page.close()
             
@@ -216,38 +300,61 @@ class LinkedInScraperService:
             page: Playwright page object
         
         Returns:
-            List of Job objects
+            Tuple of (List of Job objects, found flag)
         """
         jobs = []
-        
         found = False
+        
         try:
+            # Check if page is still valid
+            if page.is_closed():
+                self.logger.error("Page is closed, cannot extract jobs")
+                return jobs, found
+            
             # Get all job list items (API endpoint returns simple li elements)
             job_elements = page.locator('li')
-            job_count = job_elements.count()
+            
+            # Try to count elements, if context is destroyed, return empty
+            try:
+                job_count = job_elements.count()
+            except Exception as e:
+                self.logger.error(f"Error counting job elements (context destroyed?): {e}")
+                return jobs, found
             
             self.logger.debug(f"Found {job_count} job elements on page")
-
             
+            if job_count == 0:
+                return jobs, found
+            
+            # Extract all job elements at once to avoid context issues
             for i in range(job_count):
                 try:
-                    job_elem = job_elements.nth(i)
+                    # Re-locate element each time to avoid stale references
+                    job_elem = page.locator('li').nth(i)
+                    
+                    # Quick check if element still exists
+                    if job_elem.count() == 0:
+                        continue
+                    
                     job = self._extract_job_from_element(job_elem)
                     if job:
                         found = True
-                        # Check if job URL is already cached (duplicate)
+                        
+                        # Fetch job details (this creates a new page, shouldn't affect current page)
                         job_details = self.fetch_job_details(job.url)
                         if job_details:
-                            job.description = job_details 
-
+                            job.description = job_details
+                        
+                        # Check Redis cache for duplicates
                         if self.redis_client and self.redis_client.check_and_cache_job(job):
                             self.logger.debug(f"Skipping duplicate job: {job.url}")
                             continue
-
+                        
                         jobs.append(job)
                         
                 except Exception as e:
                     self.logger.warning(f"Error extracting job {i}: {e}")
+                    # Continue to next job even if one fails
                     continue
                     
         except Exception as e:
@@ -365,43 +472,52 @@ class LinkedInScraperService:
         Returns:
             Dictionary with job details or None if fetch fails
         """
-        from bs4 import BeautifulSoup
-        import requests
         
         page = None
         try:
-            page = self._browser.new_page()
+            page = self._create_stealth_page()
             page.set_default_timeout(self.timeout)
             
+            # Random delay to appear more human-like
+            time.sleep(time.time() % 3)  # Random delay between 2-3.5 seconds
             self.logger.debug(f"Fetching job details from: {job_url}")
             # Wait for network to be idle to ensure page is fully loaded
-            #page.goto(job_url, wait_until='domcontentloaded')
-            
-            page = requests.get(job_url)
-
+            # Navigate to job URL with retry logic
             count = 3
-            while page.status_code != 200 and count > 0:
-                time.sleep(2)
-                page = requests.get(job_url)
+            success = False
+            while count > 0 and not success:
+                try:
+                    page.goto(job_url, wait_until='domcontentloaded')
+                    html = page.content()
+                    if """<html><head>\n    <meta http-equiv="refresh" content="1;url=https://www.linkedin.com">\n    <script type="text/javascript">""" not in html:
+                            success = True
+                    else:
+                        time.sleep(time.time() % 10)
+                except PlaywrightTimeout:
+                    self.logger.warning(f"Timeout loading page, retries left: {count - 1}")
+                    time.sleep(time.time() % 10)
                 count -= 1
-
-            soup = BeautifulSoup(page.text, 'html.parser')
-            content =soup.select("section.core-section-container.my-3.description")
-            if len(content) > 0:
-                job_details = content[0].get_text().strip().lower()
+                
+            
+            if not success:
+                self.logger.error(f"Failed to load job details page after retries: {job_url}")
+                return None
+            
+            # Try primary selector: section.core-section-container.my-3.description
+            job_details = None
+            content_elem = page.locator("section.core-section-container.my-3.description")
+            
+            if content_elem.count() > 0:
+                job_details = content_elem.first.inner_text().strip().lower()
             else:
-                job_details = soup.find('div', class_='mt4').get_text().strip().lower()
-            # Extract job description with proper waiting
-            # desc_selector = '#job-details > div.mt4'
-            # desc_elem = page.locator(desc_selector)
-            #job-details > div.mt4 > p
-            # # Wait for element to be visible (with timeout)
-            # try:
-            #     desc_elem.first.wait_for(state='visible', timeout=5000)
-            #     job_details = desc_elem.first.inner_text().strip().lower()
-            # except PlaywrightTimeout:
-            #     self.logger.warning(f"Description element not found within timeout for {job_url}")
-            #     job_details = ""
+                # Fallback to div.mt4
+                fallback_elem = page.locator('div.mt4')
+                if fallback_elem.count() > 0:
+                    job_details = fallback_elem.first.inner_text().strip().lower()
+            #job-details > div
+            if not job_details:
+                self.logger.warning(f"Could not extract job details from {job_url}")
+                return None
            
             return job_details
 
@@ -409,12 +525,8 @@ class LinkedInScraperService:
             self.logger.error(f"Error fetching job details from {job_url}: {e}", exc_info=True)
             return None
         finally:
-            # Always close the page, even if there's an error
             if page:
-                try:
-                    page.close()
-                except Exception:
-                    pass
+                page.close()
 
     def _evaluate_job_details(self, job_details: str, keywords: List[str]) -> bool:
         """
