@@ -7,6 +7,7 @@ from src.models.config import WorkerConfig, AppConfig
 from src.workers.base_worker import BaseWorker
 from src.workers.job_worker import JobWorker
 from src.workers.linkedin_worker import LinkedInWorker
+from src.workers.startups_worker import StartupsWorker
 
 
 class WorkerFactory:
@@ -20,6 +21,7 @@ class WorkerFactory:
     WORKER_TYPES = {
         'job': JobWorker,
         'linkedin': LinkedInWorker,
+        'startups': StartupsWorker,
         # Future worker types can be added here:
         # 'google': GoogleWorker,
         # 'indeed': IndeedWorker,
@@ -95,8 +97,32 @@ class WorkerFactory:
                 workplace_type=linkedin_config.get('workplace_type'),
                 experience_level=linkedin_config.get('experience_level'),
                 excluded_companies=linkedin_config.get('excluded_companies'),
-                max_results=linkedin_config.get('max_results', 25),
+                max_results=linkedin_config.get('max_results', 100),
                 headless=linkedin_config.get('headless', True),
+                redis_host=redis_host,
+                redis_port=redis_port,
+                redis_db=redis_db
+            )
+        
+        elif worker_type == 'startups':
+            # Extract Startups-specific config
+            startups_config = config.config or {}
+            
+            # Get Redis configuration from app_config if available
+            redis_host = None
+            redis_port = None
+            redis_db = None
+            if self.app_config:
+                redis_host = self.app_config.redis_host
+                redis_port = self.app_config.redis_port
+                redis_db = self.app_config.redis_db
+            
+            return worker_class(
+                name=config.name,
+                interval=config.interval,
+                keywords=startups_config.get('keywords'),
+                max_results=startups_config.get('max_results', 100),
+                headless=startups_config.get('headless', True),
                 redis_host=redis_host,
                 redis_port=redis_port,
                 redis_db=redis_db
