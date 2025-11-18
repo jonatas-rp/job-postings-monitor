@@ -1,13 +1,12 @@
 """LinkedIn job search worker implementation"""
 
 import logging
-import os
-import pandas as pd
 from datetime import datetime
 from typing import Optional, List
 
 from src.workers.base_worker import BaseWorker
 from src.services.linkedin_scraper import LinkedInScraperService
+from src.utils.csv_writer import safe_write_csv
 
 
 class LinkedInWorker(BaseWorker):
@@ -138,47 +137,25 @@ class LinkedInWorker(BaseWorker):
             # Save jobs to CSV
             if jobs:
                 try:
-                    # Create output directory if it doesn't exist
-                    output_dir = "output"
-                    os.makedirs(output_dir, exist_ok=True)
-                    
                     # Generate filename with timestamp
                     timestamp_str = datetime.now().strftime("%Y%m%d")
-                    csv_filename = f"{output_dir}/{self.name}_jobs_{timestamp_str}.csv"
+                    csv_filename = f"output/{self.name}_jobs_{timestamp_str}.csv"
                     
-                    # Convert jobs to DataFrame
+                    # Convert jobs to dictionaries
                     jobs_data = [job.to_dict() for job in jobs]
-                    new_df = pd.DataFrame(jobs_data)
                     
-                    # Remove description column from DataFrame
-                    new_df = new_df.drop(columns=['description'], errors='ignore')
+                    # Write to CSV with file locking
+                    success = safe_write_csv(
+                        filename=csv_filename,
+                        data=jobs_data,
+                        logger=self.logger,
+                        drop_columns=['description']
+                    )
                     
-                    # Check if CSV file already exists
-                    if os.path.exists(csv_filename):
-                        # Load existing data
-                        existing_df = pd.read_csv(csv_filename)
-                        self.logger.info(f"Loading existing data from {csv_filename} ({len(existing_df)} existing jobs)")
-                        
-                        # Append new data to existing DataFrame
-                        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-                        
-                        # Remove duplicates based on URL (keeps first occurrence)
-                        if 'url' in combined_df.columns:
-                            original_count = len(combined_df)
-                            combined_df = combined_df.drop_duplicates(subset=['url'], keep='first')
-                            duplicates_removed = original_count - len(combined_df)
-                            if duplicates_removed > 0:
-                                self.logger.info(f"Removed {duplicates_removed} duplicate job(s)")
-                        
-                        self.logger.info(f"Combined data: {len(combined_df)} total jobs")
+                    if success:
+                        self.logger.info(f"Saved {len(jobs)} jobs to {csv_filename}")
                     else:
-                        combined_df = new_df
-                        self.logger.info(f"Creating new CSV file: {csv_filename}")
-                    
-                    # Save to CSV
-                    combined_df.to_csv(csv_filename, index=False, encoding='utf-8')
-                    
-                    self.logger.info(f"Saved {len(combined_df)} jobs to {csv_filename}")
+                        self.logger.error(f"Failed to save jobs to {csv_filename}")
                 except Exception as e:
                     self.logger.error(f"Failed to save jobs to CSV: {e}", exc_info=True)
             else:

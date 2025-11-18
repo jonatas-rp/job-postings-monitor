@@ -52,7 +52,7 @@ class LinkedInScraperService:
                 host=redis_host,
                 port=redis_port,
                 db=redis_db,
-                default_ttl=86400  # 24 hours
+                default_ttl=5*86400  # 24 hours
             )
             self.logger.info("Redis client initialized for job caching")
         except Exception as e:
