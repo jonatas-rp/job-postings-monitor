@@ -7,6 +7,7 @@ from typing import Optional, List
 from src.workers.base_worker import BaseWorker
 from src.services.linkedin_scraper import LinkedInScraperService
 from src.utils.csv_writer import safe_write_csv
+from src.utils.summary_generator import generate_and_save_summaries
 
 
 class LinkedInWorker(BaseWorker):
@@ -134,12 +135,19 @@ class LinkedInWorker(BaseWorker):
                 f"(Total: {self.total_jobs_found} across {self.search_count} searches)"
             )
 
-            # Save jobs to CSV
+            # Classify and save jobs to CSV
             if jobs:
                 try:
-                    # Generate filename with timestamp
-                    timestamp_str = datetime.now().strftime("%Y%m%d")
-                    csv_filename = f"output/{self.name}_jobs_{timestamp_str}.csv"
+                    # Classify each job
+                    for job in jobs:
+                        job.classify()
+                    
+                    # Generate filename with organized folder structure
+                    now = datetime.now()
+                    year = now.strftime("%Y")
+                    month = now.strftime("%m")
+                    day_str = now.strftime("%Y%m%d")
+                    csv_filename = f"output/{self.name}/{year}/{month}/{self.name}_jobs_{day_str}.csv"
                     
                     # Convert jobs to dictionaries
                     jobs_data = [job.to_dict() for job in jobs]
@@ -156,17 +164,18 @@ class LinkedInWorker(BaseWorker):
                         self.logger.info(f"Saved {len(jobs)} jobs to {csv_filename}")
                     else:
                         self.logger.error(f"Failed to save jobs to {csv_filename}")
+                    
+                    # Generate and save job market summaries
+                    generate_and_save_summaries(
+                        jobs=jobs_data,
+                        worker_name=self.name,
+                        logger=self.logger
+                    )
+                    
                 except Exception as e:
                     self.logger.error(f"Failed to save jobs to CSV: {e}", exc_info=True)
             else:
                 self.logger.debug("No jobs to save")
-            
-            # Here you would typically:
-            # 1. Check cache to see if jobs are new
-            # 2. Evaluate jobs against matching criteria
-            # 3. Save matched jobs to output
-            # 4. Send notifications for high-match jobs
-            # For now, we just log them
             
         except Exception as e:
             self.logger.error(
@@ -179,6 +188,3 @@ class LinkedInWorker(BaseWorker):
     def __del__(self):
         """Cleanup when worker is destroyed"""
         self._cleanup_scraper()
-
-
-
